@@ -1,0 +1,26 @@
+# Dependências Python para XTTS V2 RunPod Serverless
+
+# RunPod SDK
+runpod>=1.6.0
+
+# Coqui TTS com XTTS V2
+TTS>=0.22.0
+
+# Google Cloud Storage
+google-cloud-storage>=2.10.0
+
+# PyTorch (já incluído na imagem base, mas especificado para referência)
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Processamento de áudio
+soundfile>=0.12.1
+pydub>=0.25.1
+librosa>=0.10.0
+
+# Monitoramento de sistema
+psutil>=5.9.0
+
+# Utilidades
+numpy>=1.24.0
+scipy>=1.10.0
