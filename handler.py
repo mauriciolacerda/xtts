@@ -19,8 +19,17 @@ import torch
 from TTS.api import TTS
 from google.cloud import storage
 import soundfile as sf
-import deepspeed
 from pydub import AudioSegment
+
+# Tentar importar deepspeed (opcional)
+try:
+    import deepspeed
+    DEEPSPEED_AVAILABLE = True
+except Exception as e:
+    print(f"WARNING: DeepSpeed não disponível: {e}")
+    print("Continuando sem DeepSpeed...")
+    DEEPSPEED_AVAILABLE = False
+    deepspeed = None
 
 
 # ===== CONFIGURAÇÃO =====
@@ -67,8 +76,8 @@ try:
     tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
     print("Modelo XTTS V2 carregado com sucesso!")
     
-    # Ativar DeepSpeed inference para aceleração
-    if device == "cuda" and tts is not None:
+    # Ativar DeepSpeed inference para aceleração (se disponível)
+    if device == "cuda" and tts is not None and DEEPSPEED_AVAILABLE:
         print("Inicializando DeepSpeed inference...")
         try:
             tts.synthesizer.tts_model = deepspeed.init_inference(
@@ -81,6 +90,8 @@ try:
         except Exception as ds_error:
             print(f"WARNING: Não foi possível ativar DeepSpeed: {ds_error}")
             print("Continuando com inferência padrão...")
+    elif device == "cuda" and not DEEPSPEED_AVAILABLE:
+        print("DeepSpeed não está disponível. Usando inferência padrão do PyTorch.")
 except Exception as e:
     print(f"ERRO ao carregar modelo: {e}")
     tts = None
