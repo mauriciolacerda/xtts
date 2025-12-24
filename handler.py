@@ -58,8 +58,11 @@ DEFAULT_TOP_K = 50
 DEFAULT_TOP_P = 0.85
 
 # Configuração de chunking para textos longos
-CHUNK_THRESHOLD = 1500  # Caracteres mínimos para ativar chunking
-DEFAULT_CHUNK_SIZE = 600  # Tamanho alvo de cada chunk
+# Valores baseados na documentação oficial do XTTS:
+# - split_sentence usa 250 chars por padrão
+# - gpt_max_text_tokens = 400 tokens (~400 chars considerando idiomas latinos)
+CHUNK_THRESHOLD = 400  # Caracteres mínimos para ativar chunking
+DEFAULT_CHUNK_SIZE = 250  # Tamanho alvo de cada chunk (recomendado pela doc XTTS)
 PROGRESS_UPDATE_INTERVAL = 10  # Atualizar progresso a cada 10%
 
 print("Inicializando XTTS V2...")
@@ -282,6 +285,9 @@ def split_text_into_sentence_chunks(text, chunk_size=DEFAULT_CHUNK_SIZE):
     """
     Divide texto em chunks respeitando limites de sentenças.
     Cada chunk contém sentenças completas e tem aproximadamente chunk_size caracteres.
+    
+    Valor padrão de 250 chars é baseado na função split_sentence do XTTS,
+    que usa text_split_length=250 como padrão.
     """
     # Dividir texto em sentenças usando regex
     # Captura pontos finais seguidos de espaço/quebra de linha
