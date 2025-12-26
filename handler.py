@@ -16,10 +16,13 @@ import psutil
 
 import runpod
 import torch
+import numpy as np
 from TTS.api import TTS
 from google.cloud import storage
 import soundfile as sf
 from pydub import AudioSegment
+from pydub.effects import normalize, compress_dynamic_range, high_pass_filter, low_pass_filter
+from pydub.silence import detect_leading_silence, split_on_silence
 
 # Tentar importar deepspeed (opcional)
 try:
@@ -64,6 +67,12 @@ DEFAULT_TOP_P = 0.85
 CHUNK_THRESHOLD = 400  # Caracteres mínimos para ativar chunking
 DEFAULT_CHUNK_SIZE = 250  # Tamanho alvo de cada chunk (recomendado pela doc XTTS)
 PROGRESS_UPDATE_INTERVAL = 10  # Atualizar progresso a cada 10%
+
+# Limite de texto baseado em timeout do RunPod
+# RunPod serverless tem timeout padrão de 10 minutos (600s)
+# Estimativa: ~3-5s por chunk de 250 chars = ~120-200 chunks max
+# Limite seguro: 25.000 caracteres (~100 chunks = ~8 minutos)
+MAX_TEXT_LENGTH = 25000  # Caracteres máximos permitidos
 
 print("Inicializando XTTS V2...")
 
@@ -216,9 +225,21 @@ def download_audio_from_gcs(ref_audio_url, voice_id, max_retries=3):
             blob = bucket.blob(blob_name)
             
             print(f"Baixando áudio de referência (tentativa {attempt + 1}/{max_retries})...")
-            blob.download_to_filename(str(cache_path))
             
-            print(f"Áudio baixado e salvo em cache: {voice_id}")
+            # Baixar para arquivo temporário primeiro
+            temp_path = CACHE_DIR / f"{voice_id}_raw.wav"
+            blob.download_to_filename(str(temp_path))
+            
+            # Pré-processar o áudio de referência
+            preprocess_reference_audio(str(temp_path), str(cache_path))
+            
+            # Remover arquivo temporário
+            try:
+                temp_path.unlink()
+            except:
+                pass
+            
+            print(f"Áudio baixado, processado e salvo em cache: {voice_id}")
             
             # Limpar cache se necessário
             clean_cache()
@@ -277,6 +298,246 @@ def upload_audio_to_gcs(local_path, voice_id, max_retries=3):
                 time.sleep(wait_time)
             else:
                 raise Exception(f"Falha ao fazer upload após {max_retries} tentativas")
+
+
+# ===== FUNÇÕES DE PROCESSAMENTO DE ÁUDIO =====
+
+def preprocess_reference_audio(input_path, output_path):
+    """
+    Pré-processa o áudio de referência para melhorar a qualidade da clonagem.
+    
+    Tratamentos aplicados:
+    1. Conversão para mono 24kHz (formato ideal para XTTS)
+    2. Normalização de volume
+    3. Remoção de silêncios longos no início/fim
+    4. Filtro passa-alta para remover ruídos de baixa frequência
+    5. Compressão dinâmica suave para uniformizar volume
+    """
+    print(f"Pré-processando áudio de referência: {input_path}")
+    
+    try:
+        # Carregar áudio
+        audio = AudioSegment.from_file(input_path)
+        original_duration = len(audio) / 1000
+        print(f"  Duração original: {original_duration:.2f}s")
+        
+        # 1. Converter para mono se estéreo
+        if audio.channels > 1:
+            audio = audio.set_channels(1)
+            print("  ✓ Convertido para mono")
+        
+        # 2. Converter sample rate para 24kHz (formato XTTS)
+        if audio.frame_rate != 24000:
+            audio = audio.set_frame_rate(24000)
+            print(f"  ✓ Sample rate ajustado para 24kHz")
+        
+        # 3. Remover silêncio no início e fim
+        def trim_silence(audio_segment, silence_thresh=-50, chunk_size=10):
+            """Remove silêncio do início e fim do áudio"""
+            start_trim = detect_leading_silence(audio_segment, silence_threshold=silence_thresh, chunk_size=chunk_size)
+            end_trim = detect_leading_silence(audio_segment.reverse(), silence_threshold=silence_thresh, chunk_size=chunk_size)
+            duration = len(audio_segment)
+            return audio_segment[start_trim:duration-end_trim]
+        
+        audio = trim_silence(audio)
+        print(f"  ✓ Silêncios removidos (início/fim)")
+        
+        # 4. Filtro passa-alta (remove ruídos de baixa frequência < 80Hz)
+        audio = high_pass_filter(audio, cutoff=80)
+        print("  ✓ Filtro passa-alta aplicado (80Hz)")
+        
+        # 5. Filtro passa-baixa (remove ruídos de alta frequência > 8000Hz)
+        # Mantém clareza da voz sem artefatos de alta frequência
+        audio = low_pass_filter(audio, cutoff=8000)
+        print("  ✓ Filtro passa-baixa aplicado (8kHz)")
+        
+        # 6. Compressão dinâmica suave para uniformizar volume
+        audio = compress_dynamic_range(audio, threshold=-20.0, ratio=3.0, attack=5.0, release=50.0)
+        print("  ✓ Compressão dinâmica aplicada")
+        
+        # 7. Normalização de volume
+        audio = normalize(audio, headroom=1.0)
+        print("  ✓ Volume normalizado")
+        
+        # 8. Garantir duração mínima de 3 segundos e máxima de 30 segundos
+        final_duration = len(audio) / 1000
+        if final_duration < 3:
+            print(f"  ⚠ Áudio muito curto ({final_duration:.2f}s). Mínimo recomendado: 3s")
+        elif final_duration > 30:
+            # Cortar para 30 segundos (pegar do meio para evitar início/fim ruins)
+            audio = audio[:30000]
+            print(f"  ✓ Áudio cortado para 30s (máximo recomendado)")
+        
+        # Exportar áudio processado
+        audio.export(output_path, format="wav")
+        
+        final_duration = len(audio) / 1000
+        print(f"  ✓ Áudio de referência processado: {final_duration:.2f}s")
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"  ⚠ Erro no pré-processamento: {e}")
+        print("  Usando áudio original sem pré-processamento")
+        # Em caso de erro, copiar original
+        shutil.copy(input_path, output_path)
+        return output_path
+
+
+def clean_text_for_tts(text, language="pt"):
+    """
+    Limpa e normaliza o texto para evitar que pontuação seja falada.
+    
+    Problemas resolvidos:
+    - Pontuação sendo lida como palavras ("punto", "coma", etc)
+    - Caracteres especiais causando artefatos
+    - Múltiplos espaços e quebras de linha
+    - Números formatados incorretamente
+    """
+    if not text:
+        return text
+    
+    original_length = len(text)
+    
+    # 1. Remover caracteres especiais que podem ser lidos
+    # Manter apenas pontuação básica que o modelo entende
+    special_chars_to_remove = [
+        '•', '●', '○', '■', '□', '▪', '▫', '►', '◄', '★', '☆',
+        '†', '‡', '§', '¶', '©', '®', '™', '°', '±', '×', '÷',
+        '→', '←', '↑', '↓', '↔', '⇒', '⇐', '⇑', '⇓',
+        '♠', '♣', '♥', '♦', '♪', '♫', '✓', '✗', '✔', '✘',
+        '_', '|', '\\', '/', '<', '>', '{', '}', '[', ']',
+        '`', '~', '^', '@', '#', '$', '%', '&', '*', '=', '+'
+    ]
+    for char in special_chars_to_remove:
+        text = text.replace(char, ' ')
+    
+    # 2. Normalizar aspas e apóstrofos
+    text = text.replace('"', ' ')
+    text = text.replace("'", ' ')
+    text = text.replace('"', ' ')
+    text = text.replace('"', ' ')
+    text = text.replace(''', ' ')
+    text = text.replace(''', ' ')
+    text = text.replace('«', ' ')
+    text = text.replace('»', ' ')
+    
+    # 3. Normalizar travessões e hífens
+    text = text.replace('—', ', ')  # Em-dash para pausa
+    text = text.replace('–', ', ')  # En-dash para pausa
+    text = text.replace(' - ', ', ')  # Hífen com espaços para pausa
+    
+    # 4. Remover parênteses e colchetes (manter conteúdo)
+    text = re.sub(r'[\(\)\[\]]', ' ', text)
+    
+    # 5. Substituir reticências por ponto final
+    text = re.sub(r'\.{2,}', '.', text)
+    text = text.replace('…', '.')
+    
+    # 6. Normalizar pontuação duplicada
+    text = re.sub(r'([.!?])\1+', r'\1', text)  # "!!" -> "!"
+    text = re.sub(r'[,;:]+', ',', text)  # Múltiplas vírgulas -> uma
+    
+    # 7. Garantir espaço após pontuação
+    text = re.sub(r'([.!?,;:])([A-Za-zÀ-ÿ])', r'\1 \2', text)
+    
+    # 8. Remover pontuação no início de frases (problema comum)
+    text = re.sub(r'^[.!?,;:\s]+', '', text)
+    text = re.sub(r'\s+[.!?,;:]+\s+', ' ', text)  # Pontuação solta no meio
+    
+    # 9. Normalizar espaços
+    text = re.sub(r'\s+', ' ', text)  # Múltiplos espaços -> um
+    text = re.sub(r'\n+', ' ', text)  # Quebras de linha -> espaço
+    text = text.strip()
+    
+    # 10. Garantir que termina com pontuação
+    if text and text[-1] not in '.!?':
+        text += '.'
+    
+    # 11. Remover pontuação final duplicada após o passo anterior
+    text = re.sub(r'([.!?])\1+$', r'\1', text)
+    
+    cleaned_length = len(text)
+    if original_length != cleaned_length:
+        print(f"  Texto limpo: {original_length} -> {cleaned_length} caracteres")
+    
+    return text
+
+
+def postprocess_generated_audio(input_path, output_path):
+    """
+    Pós-processa o áudio gerado para melhorar a qualidade final.
+    
+    Tratamentos aplicados:
+    1. Remoção de silêncios excessivos
+    2. Remoção de cliques e pops no início/fim
+    3. Normalização de volume
+    4. Fade in/out suave para evitar cliques
+    5. Filtro para remover artefatos de alta frequência
+    """
+    print("Pós-processando áudio gerado...")
+    
+    try:
+        # Carregar áudio
+        audio = AudioSegment.from_file(input_path)
+        original_duration = len(audio) / 1000
+        
+        # 1. Remover silêncio excessivo no início e fim
+        def trim_silence(audio_segment, silence_thresh=-45, chunk_size=10):
+            start_trim = detect_leading_silence(audio_segment, silence_threshold=silence_thresh, chunk_size=chunk_size)
+            end_trim = detect_leading_silence(audio_segment.reverse(), silence_threshold=silence_thresh, chunk_size=chunk_size)
+            duration = len(audio_segment)
+            # Manter um pequeno buffer de 50ms
+            start_trim = max(0, start_trim - 50)
+            end_trim = max(0, end_trim - 50)
+            return audio_segment[start_trim:duration-end_trim]
+        
+        audio = trim_silence(audio)
+        
+        # 2. Remover segmentos de silêncio muito longos no meio do áudio
+        # Isso ajuda a remover pausas artificiais e fonemas soltos
+        chunks = split_on_silence(
+            audio,
+            min_silence_len=500,  # 500ms de silêncio
+            silence_thresh=-40,   # Threshold de silêncio
+            keep_silence=200      # Manter 200ms de silêncio entre chunks
+        )
+        
+        if chunks:
+            # Reconstruir áudio removendo silêncios excessivos
+            audio = chunks[0]
+            for chunk in chunks[1:]:
+                audio = audio.append(chunk, crossfade=50)
+        
+        # 3. Filtro passa-alta suave (remove rumble < 60Hz)
+        audio = high_pass_filter(audio, cutoff=60)
+        
+        # 4. Filtro passa-baixa (remove artefatos de alta frequência > 10kHz)
+        audio = low_pass_filter(audio, cutoff=10000)
+        
+        # 5. Compressão dinâmica muito suave para uniformizar
+        audio = compress_dynamic_range(audio, threshold=-25.0, ratio=2.0, attack=10.0, release=100.0)
+        
+        # 6. Normalização de volume
+        audio = normalize(audio, headroom=0.5)
+        
+        # 7. Fade in/out para evitar cliques
+        fade_duration = min(50, len(audio) // 10)  # 50ms ou 10% do áudio
+        audio = audio.fade_in(fade_duration).fade_out(fade_duration)
+        
+        # Exportar
+        audio.export(output_path, format="wav", parameters=["-ar", "24000"])
+        
+        final_duration = len(audio) / 1000
+        print(f"  ✓ Áudio pós-processado: {original_duration:.2f}s -> {final_duration:.2f}s")
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"  ⚠ Erro no pós-processamento: {e}")
+        print("  Usando áudio original")
+        shutil.copy(input_path, output_path)
+        return output_path
 
 
 # ===== FUNÇÕES DE CHUNKING E PROGRESS =====
@@ -574,6 +835,20 @@ def handler(job):
         # Gerar job_id único para tracking
         job_id = job.get("id", str(uuid.uuid4()))
         text_length = len(gen_text)
+        
+        # Validar tamanho máximo do texto (prevenir timeout)
+        if text_length > MAX_TEXT_LENGTH:
+            estimated_chunks = text_length // DEFAULT_CHUNK_SIZE
+            estimated_time_minutes = (estimated_chunks * 4) / 60  # 4s por chunk em média
+            return {
+                "error": f"Texto muito longo: {text_length} caracteres (máximo: {MAX_TEXT_LENGTH})",
+                "text_length": text_length,
+                "max_length": MAX_TEXT_LENGTH,
+                "estimated_processing_time_minutes": round(estimated_time_minutes, 1),
+                "suggestion": "Divida o texto em partes menores ou aumente o timeout do endpoint RunPod para 15-20 minutos",
+                "runpod_timeout_config": "Settings > Max Execution Time no RunPod dashboard"
+            }
+        
         use_chunking = text_length > CHUNK_THRESHOLD
         
         print(f"\n=== Nova solicitação ===")
@@ -597,6 +872,10 @@ def handler(job):
         start_time = time.time()
         chunk_info = []
         
+        # Limpar texto para evitar problemas de pontuação falada
+        gen_text = clean_text_for_tts(gen_text, language)
+        text_length = len(gen_text)  # Atualizar após limpeza
+        
         # Escolher estratégia baseado no tamanho do texto
         if use_chunking:
             # Processar em chunks para textos longos
@@ -613,6 +892,17 @@ def handler(job):
             
             # Concatenar todos os chunks
             output_path = concatenate_audio_chunks(chunk_files, job_id, voice_id)
+            
+            # Pós-processar áudio final
+            processed_output = f"/tmp/processed_{voice_id}_{uuid.uuid4().hex[:8]}.wav"
+            postprocess_generated_audio(output_path, processed_output)
+            
+            # Substituir pelo processado
+            try:
+                os.remove(output_path)
+            except:
+                pass
+            output_path = processed_output
             
             # Construir info dos chunks
             for i, (chunk_text, duration) in enumerate(zip(chunks, chunk_durations)):
@@ -638,6 +928,17 @@ def handler(job):
                 top_k=top_k,
                 top_p=top_p
             )
+            
+            # Pós-processar áudio gerado
+            processed_output = f"/tmp/processed_{voice_id}_{uuid.uuid4().hex[:8]}.wav"
+            postprocess_generated_audio(output_path, processed_output)
+            
+            # Substituir pelo processado
+            try:
+                os.remove(output_path)
+            except:
+                pass
+            output_path = processed_output
         
         generation_time = time.time() - start_time
         print(f"\nÁudio gerado em {generation_time:.2f}s")
