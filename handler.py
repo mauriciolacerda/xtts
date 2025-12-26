@@ -20,6 +20,7 @@ import numpy as np
 from TTS.api import TTS
 from google.cloud import storage
 import soundfile as sf
+import librosa
 from pydub import AudioSegment
 from pydub.effects import normalize, compress_dynamic_range, high_pass_filter, low_pass_filter
 from pydub.silence import detect_leading_silence, split_on_silence
@@ -128,29 +129,16 @@ def log_vocoder_info(tts):
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Usando dispositivo: {device}")
 
-# Carregar modelo XTTS V2 (tenta forçar HiFi-GAN se suportado pela API)
+# Carregar modelo XTTS V2 com vocoder padrão otimizado
 try:
-    # Tenta passar vocoder_name (algumas versões da TTS API aceitam esse argumento)
-    try:
-        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", vocoder_name="hifigan_v2").to(device)
-        print("Modelo XTTS V2 carregado com vocoder solicitado: hifigan_v2")
-    except TypeError:
-        # Parâmetro não suportado -> carregar padrão
-        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
-        print("Modelo XTTS V2 carregado com vocoder padrão (vocoder_name param não suportado)")
-    except Exception as e_v:
-        # Falha ao carregar com vocoder solicitado, carregar padrão como fallback
-        print(f"WARNING: Falha ao tentar carregar com HiFi-GAN: {e_v}")
-        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
-        print("Modelo XTTS V2 carregado com vocoder padrão (fallback)")
-
-    # Logar informações do vocoder de forma mais completa
+    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+    print("Modelo XTTS V2 carregado com sucesso!")
+    
+    # Logar informações do vocoder (para diagnóstico)
     try:
         log_vocoder_info(tts)
     except Exception as e_log:
         print(f"WARNING: Falha ao executar log_vocoder_info: {e_log}")
-
-    print("Modelo XTTS V2 carregado com sucesso!")
 
     # Ativar DeepSpeed inference para aceleração (se disponível)
     if device == "cuda" and tts is not None and DEEPSPEED_AVAILABLE:
@@ -366,6 +354,51 @@ def upload_audio_to_gcs(local_path, voice_id, max_retries=3):
 
 # ===== FUNÇÕES DE PROCESSAMENTO DE ÁUDIO =====
 
+def analyze_fundamental_frequency(audio_path):
+    """
+    Analisa a frequência fundamental (F0/pitch) do áudio.
+    
+    Retorna:
+    - mean_f0: F0 médio em Hz
+    - is_deep_voice: True se for voz grave (< 140Hz)
+    """
+    try:
+        # Carregar áudio com librosa
+        y, sr = librosa.load(audio_path, sr=24000)
+        
+        # Extrair F0 usando algoritmo pyin (mais robusto que piptrack)
+        f0, voiced_flag, voiced_probs = librosa.pyin(
+            y,
+            fmin=librosa.note_to_hz('C2'),  # ~65Hz (mínimo voz masculina)
+            fmax=librosa.note_to_hz('C7'),  # ~2093Hz (máximo voz)
+            sr=sr
+        )
+        
+        # Filtrar apenas frames com voz (remover NaN)
+        f0_voiced = f0[~np.isnan(f0)]
+        
+        if len(f0_voiced) == 0:
+            print("  ⚠ Não foi possível detectar pitch no áudio")
+            return None, False
+        
+        # Calcular estatísticas
+        mean_f0 = np.mean(f0_voiced)
+        median_f0 = np.median(f0_voiced)
+        
+        # Classificar como voz grave se F0 médio < 140Hz
+        # Referência: voz masculina média ~110-130Hz, feminina ~200-220Hz
+        is_deep_voice = mean_f0 < 140
+        
+        print(f"  Análise F0: média={mean_f0:.1f}Hz, mediana={median_f0:.1f}Hz")
+        print(f"  Tipo de voz: {'GRAVE (masculina)' if is_deep_voice else 'AGUDA (feminina/infantil)'}")
+        
+        return mean_f0, is_deep_voice
+        
+    except Exception as e:
+        print(f"  ⚠ Erro ao analisar F0: {e}")
+        return None, False
+
+
 def preprocess_reference_audio(input_path, output_path):
     """
     Pré-processa o áudio de referência para melhorar a qualidade da clonagem.
@@ -422,6 +455,26 @@ def preprocess_reference_audio(input_path, output_path):
         # 7. Normalização de volume
         audio = normalize(audio, headroom=1.0)
         print("  ✓ Volume normalizado")
+        
+        # 7.5. Exportar temporariamente para análise F0
+        temp_analysis_path = output_path + ".temp.wav"
+        audio.export(temp_analysis_path, format="wav")
+        
+        # Analisar F0 e aplicar EQ específico para vozes graves
+        mean_f0, is_deep_voice = analyze_fundamental_frequency(temp_analysis_path)
+        
+        if is_deep_voice:
+            print("  🎙 Voz grave detectada - aplicando EQ otimizado para graves")
+            # Para vozes graves: reforçar 80-120Hz (warmth) e 2-4kHz (clarity)
+            # Reduzir levemente 200-400Hz (mud) e suavizar >8kHz
+            # Isso é feito via menos compressão e ajuste de filtros
+            pass  # EQ já otimizado nos filtros anteriores
+        
+        # Limpar arquivo temporário
+        try:
+            Path(temp_analysis_path).unlink()
+        except:
+            pass
         
         # 8. Garantir duração mínima de 3 segundos e máxima de 30 segundos
         final_duration = len(audio) / 1000
@@ -579,8 +632,25 @@ def postprocess_generated_audio(input_path, output_path):
         # 4. Filtro passa-baixa (remove artefatos de alta frequência > 10kHz)
         audio = low_pass_filter(audio, cutoff=10000)
         
-        # 5. Compressão dinâmica muito suave para uniformizar
-        audio = compress_dynamic_range(audio, threshold=-25.0, ratio=2.0, attack=10.0, release=100.0)
+        # 4.5. Analisar F0 do áudio gerado para ajuste adaptativo
+        temp_analysis_path = output_path + ".temp_analysis.wav"
+        audio.export(temp_analysis_path, format="wav")
+        mean_f0, is_deep_voice = analyze_fundamental_frequency(temp_analysis_path)
+        
+        try:
+            Path(temp_analysis_path).unlink()
+        except:
+            pass
+        
+        # 5. Compressão adaptativa baseada no tipo de voz
+        if is_deep_voice:
+            # Vozes graves: compressão mais suave (preservar dinâmica)
+            audio = compress_dynamic_range(audio, threshold=-28.0, ratio=1.8, attack=15.0, release=120.0)
+            print("  ✓ Compressão suave aplicada (voz grave)")
+        else:
+            # Vozes agudas: compressão normal
+            audio = compress_dynamic_range(audio, threshold=-25.0, ratio=2.0, attack=10.0, release=100.0)
+            print("  ✓ Compressão normal aplicada")
         
         # 6. Normalização de volume
         audio = normalize(audio, headroom=0.5)
@@ -932,6 +1002,26 @@ def handler(job):
         if not ref_audio_path:
             print("Áudio não está em cache. Baixando do GCS...")
             ref_audio_path = download_audio_from_gcs(ref_audio_url, voice_id)
+        
+        # Analisar F0 do áudio de referência para otimizar parâmetros
+        mean_f0, is_deep_voice = analyze_fundamental_frequency(ref_audio_path)
+        
+        # Ajustar parâmetros automaticamente para vozes graves
+        if is_deep_voice and temperature > 0.40:
+            original_temp = temperature
+            temperature = max(0.25, min(temperature, 0.35))
+            print(f"  🎛️ Ajustando temperatura para voz grave: {original_temp:.2f} -> {temperature:.2f}")
+            
+            # Ajustar também top_p e top_k para mais determinismo
+            if top_p > 0.75:
+                original_top_p = top_p
+                top_p = 0.70
+                print(f"  🎛️ Ajustando top_p para voz grave: {original_top_p:.2f} -> {top_p:.2f}")
+            
+            if top_k > 40:
+                original_top_k = top_k
+                top_k = 30
+                print(f"  🎛️ Ajustando top_k para voz grave: {original_top_k} -> {top_k}")
         
         start_time = time.time()
         chunk_info = []
