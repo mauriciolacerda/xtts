@@ -6,6 +6,9 @@ runpod>=1.6.0
 # Coqui TTS com XTTS V2
 TTS>=0.22.0
 
+# Transformers (versão específica compatível com TTS 0.22.0)
+transformers==4.33.0
+
 # Google Cloud Storage
 google-cloud-storage>=2.10.0
 
