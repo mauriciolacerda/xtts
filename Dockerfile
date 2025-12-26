@@ -26,7 +26,9 @@ RUN pip install --no-cache-dir \
     soundfile \
     psutil \
     numpy \
-    pydub
+    pydub \
+    deepspeed>=0.12.0 \
+    ninja
 
 # Aceitar termos de serviço do Coqui TTS
 ENV COQUI_TOS_AGREED=1

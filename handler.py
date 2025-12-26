@@ -83,11 +83,34 @@ print("Inicializando XTTS V2...")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 print(f"Usando dispositivo: {device}")
 
-# Carregar modelo XTTS V2
+# Carregar modelo XTTS V2 (tenta forçar HiFi-GAN se suportado pela API)
 try:
-    tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+    # Tenta passar vocoder_name (algumas versões da TTS API aceitam esse argumento)
+    try:
+        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", vocoder_name="hifigan_v2").to(device)
+        print("Modelo XTTS V2 carregado com vocoder solicitado: hifigan_v2")
+    except TypeError:
+        # Parâmetro não suportado -> carregar padrão
+        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+        print("Modelo XTTS V2 carregado com vocoder padrão (vocoder_name param não suportado)")
+    except Exception as e_v:
+        # Falha ao carregar com vocoder solicitado, carregar padrão como fallback
+        print(f"WARNING: Falha ao tentar carregar com HiFi-GAN: {e_v}")
+        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
+        print("Modelo XTTS V2 carregado com vocoder padrão (fallback)")
+
+    # Logar informações do vocoder se disponível
+    try:
+        vocoder_info = None
+        if hasattr(tts, "synthesizer"):
+            synth = tts.synthesizer
+            vocoder_info = getattr(synth, "vocoder_name", None) or getattr(synth, "vocoder_model", None)
+        print(f"Vocoder info: {vocoder_info}")
+    except Exception as e_log:
+        print(f"WARNING: Não foi possível obter informação do vocoder: {e_log}")
+
     print("Modelo XTTS V2 carregado com sucesso!")
-    
+
     # Ativar DeepSpeed inference para aceleração (se disponível)
     if device == "cuda" and tts is not None and DEEPSPEED_AVAILABLE:
         print("Inicializando DeepSpeed inference...")
