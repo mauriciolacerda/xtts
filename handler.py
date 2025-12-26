@@ -77,6 +77,55 @@ MAX_TEXT_LENGTH = 25000  # Caracteres máximos permitidos
 print("Inicializando XTTS V2...")
 
 
+def log_vocoder_info(tts):
+    """Inspeciona e loga informações disponíveis sobre o vocoder do sintetizador."""
+    try:
+        synth = getattr(tts, "synthesizer", None)
+        if synth is None:
+            print("Vocoder: synthesizer attribute not found on TTS instance.")
+            return
+
+        info = {}
+        # Atributos diretos frequentemente expostos
+        for attr in ("vocoder_name", "vocoder_model", "vocoder", "vocoder_class", "vocoder_config"):
+            if hasattr(synth, attr):
+                try:
+                    info[attr] = getattr(synth, attr)
+                except Exception as e:
+                    info[attr] = f"<error reading: {e}>"
+
+        # Inspeção mais profunda do objeto vocoder
+        try:
+            voc = getattr(synth, "vocoder", None)
+            if voc is not None:
+                info["vocoder_obj_type"] = type(voc).__name__
+                if hasattr(voc, "model"):
+                    try:
+                        info["vocoder_model_type"] = type(getattr(voc, "model")).__name__
+                    except Exception as e:
+                        info["vocoder_model_type"] = f"<error: {e}>"
+        except Exception as e:
+            info["vocoder_inspect_error"] = str(e)
+
+        # Tentar ler configurações do synthesizer
+        try:
+            cfg = getattr(synth, "config", None) or getattr(synth, "tts_config", None)
+            if cfg:
+                if isinstance(cfg, dict):
+                    info["synth_config_vocoder"] = cfg.get("vocoder")
+                else:
+                    try:
+                        info["synth_config_vocoder"] = cfg.get("vocoder")
+                    except Exception:
+                        info["synth_config_vocoder"] = str(cfg)
+        except Exception:
+            pass
+
+        print("Vocoder info dump:", info)
+    except Exception as e:
+        print("Erro ao logar vocoder info:", e)
+
+
 # ===== INICIALIZAÇÃO DO MODELO =====
 
 # Detectar dispositivo
@@ -99,15 +148,11 @@ try:
         tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2").to(device)
         print("Modelo XTTS V2 carregado com vocoder padrão (fallback)")
 
-    # Logar informações do vocoder se disponível
+    # Logar informações do vocoder de forma mais completa
     try:
-        vocoder_info = None
-        if hasattr(tts, "synthesizer"):
-            synth = tts.synthesizer
-            vocoder_info = getattr(synth, "vocoder_name", None) or getattr(synth, "vocoder_model", None)
-        print(f"Vocoder info: {vocoder_info}")
+        log_vocoder_info(tts)
     except Exception as e_log:
-        print(f"WARNING: Não foi possível obter informação do vocoder: {e_log}")
+        print(f"WARNING: Falha ao executar log_vocoder_info: {e_log}")
 
     print("Modelo XTTS V2 carregado com sucesso!")
 
