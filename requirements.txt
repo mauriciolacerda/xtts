@@ -25,6 +25,4 @@ psutil>=5.9.0
 numpy>=1.24.0
 scipy>=1.10.0
 
-# DeepSpeed para inferência acelerada
-deepspeed>=0.12.0
-ninja>=1.11.0
+# DeepSpeed instalado separadamente no Dockerfile (ver Dockerfile para detalhes)

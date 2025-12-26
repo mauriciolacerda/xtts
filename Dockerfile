@@ -15,20 +15,16 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar dependências Python
-RUN pip install --no-cache-dir \
-    runpod>=1.6.0 \
-    transformers==4.33.0 \
-    TTS>=0.22.0 \
-    google-cloud-storage>=2.10.0 \
-    torch>=2.0.0 \
-    torchaudio \
-    soundfile \
-    psutil \
-    numpy \
-    pydub \
-    deepspeed>=0.12.0 \
-    ninja
+# Copiar requirements.txt
+COPY requirements.txt /app/requirements.txt
+
+# Instalar dependências Python do requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Instalar DeepSpeed sem compilar ops CUDA (usa DS_BUILD_OPS=0)
+# Isso permite usar DeepSpeed em modo básico sem precisar do CUDA toolkit
+RUN DS_BUILD_OPS=0 pip install --no-cache-dir deepspeed>=0.12.0 || \
+    echo "WARNING: DeepSpeed installation failed, continuing without it"
 
 # Aceitar termos de serviço do Coqui TTS
 ENV COQUI_TOS_AGREED=1
