@@ -68,11 +68,7 @@ CHUNK_THRESHOLD = 400  # Caracteres mínimos para ativar chunking
 DEFAULT_CHUNK_SIZE = 250  # Tamanho alvo de cada chunk (recomendado pela doc XTTS)
 PROGRESS_UPDATE_INTERVAL = 10  # Atualizar progresso a cada 10%
 
-# Limite de texto baseado em timeout do RunPod
-# RunPod serverless tem timeout padrão de 10 minutos (600s)
-# Estimativa: ~3-5s por chunk de 250 chars = ~120-200 chunks max
-# Limite seguro: 25.000 caracteres (~100 chunks = ~8 minutos)
-MAX_TEXT_LENGTH = 25000  # Caracteres máximos permitidos
+MAX_TEXT_LENGTH = 100000  # Caracteres máximos permitidos
 
 print("Inicializando XTTS V2...")
 
