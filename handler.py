@@ -65,6 +65,9 @@ DEFAULT_TEMPERATURE = 0.7
 DEFAULT_SPEED = 1.0
 DEFAULT_TOP_K = 50
 DEFAULT_TOP_P = 0.85
+DEFAULT_REPETITION_PENALTY = 10.0
+DEFAULT_LENGTH_PENALTY = 1.0
+DEFAULT_ENABLE_TEXT_SPLITTING = False
 
 # Configuração de chunking para textos longos
 # Valores baseados na documentação oficial do XTTS:
@@ -816,7 +819,8 @@ def delete_progress_from_gcs(job_id):
 
 
 def process_chunks_sequentially(chunks, job_id, ref_audio_path, language, 
-                               temperature, speed, top_k, top_p, voice_id):
+                               temperature, speed, top_k, top_p, 
+                               repetition_penalty, length_penalty, enable_text_splitting, voice_id):
     """
     Processa chunks de texto sequencialmente, gerando áudio para cada um
     e reportando progresso.
@@ -846,9 +850,9 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
             speed=speed,
             top_k=top_k,
             top_p=top_p,
-            enable_text_splitting=False,  # Desabilitar - já dividimos manualmente
-            repetition_penalty=10.0,
-            length_penalty=1.0
+            enable_text_splitting=enable_text_splitting,
+            repetition_penalty=repetition_penalty,
+            length_penalty=length_penalty
         )
         
         chunk_time = time.time() - chunk_start
@@ -1010,6 +1014,9 @@ def handler(job):
         speed = float(job_input.get("speed", DEFAULT_SPEED))
         top_k = int(job_input.get("top_k", DEFAULT_TOP_K))
         top_p = float(job_input.get("top_p", DEFAULT_TOP_P))
+        repetition_penalty = float(job_input.get("repetition_penalty", DEFAULT_REPETITION_PENALTY))
+        length_penalty = float(job_input.get("length_penalty", DEFAULT_LENGTH_PENALTY))
+        enable_text_splitting = bool(job_input.get("enable_text_splitting", DEFAULT_ENABLE_TEXT_SPLITTING))
         chunk_size = int(job_input.get("chunk_size", DEFAULT_CHUNK_SIZE))
         
         # Validar idioma
@@ -1057,6 +1064,7 @@ def handler(job):
         print(f"Idioma: {language}")
         print(f"Estratégia: {'CHUNKED' if use_chunking else 'SINGLE'}")
         print(f"Parâmetros: temp={temperature}, speed={speed}, top_k={top_k}, top_p={top_p}")
+        print(f"           rep_penalty={repetition_penalty}, len_penalty={length_penalty}, text_split={enable_text_splitting}")
         
         # Verificar se o modelo está carregado
         if tts is None:
@@ -1106,7 +1114,8 @@ def handler(job):
             # Processar chunks sequencialmente
             chunk_files, chunk_durations = process_chunks_sequentially(
                 chunks, job_id, ref_audio_path, language,
-                temperature, speed, top_k, top_p, voice_id
+                temperature, speed, top_k, top_p,
+                repetition_penalty, length_penalty, enable_text_splitting, voice_id
             )
             
             # Concatenar todos os chunks
@@ -1146,9 +1155,9 @@ def handler(job):
                 speed=speed,
                 top_k=top_k,
                 top_p=top_p,
-                enable_text_splitting=False,  # Desabilitar para evitar vocalização de pontuação
-                repetition_penalty=10.0,
-                length_penalty=1.0
+                enable_text_splitting=enable_text_splitting,
+                repetition_penalty=repetition_penalty,
+                length_penalty=length_penalty
             )
             
             # Pós-processar áudio gerado
@@ -1195,7 +1204,10 @@ def handler(job):
                 "temperature": temperature,
                 "speed": speed,
                 "top_k": top_k,
-                "top_p": top_p
+                "top_p": top_p,
+                "repetition_penalty": repetition_penalty,
+                "length_penalty": length_penalty,
+                "enable_text_splitting": enable_text_splitting
             }
         }
         
