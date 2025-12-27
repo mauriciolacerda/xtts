@@ -846,9 +846,8 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
             speed=speed,
             top_k=top_k,
             top_p=top_p,
-            split_sentences=True,  # Manter split interno para estabilidade
             enable_text_splitting=True,  # Ativar divisão inteligente (streaming-mode)
-            repetition_penalty=5.0,  # Prevenir repetições
+            repetition_penalty=10.0,  # Valor padrão do XTTS para prevenir repetições
             length_penalty=1.0  # Estabilizar comprimento
         )
         
@@ -1147,9 +1146,8 @@ def handler(job):
                 speed=speed,
                 top_k=top_k,
                 top_p=top_p,
-                split_sentences=True,  # Manter split interno para estabilidade
                 enable_text_splitting=True,  # Ativar divisão inteligente (streaming-mode)
-                repetition_penalty=5.0,  # Prevenir repetições
+                repetition_penalty=10.0,  # Valor padrão do XTTS para prevenir repetições
                 length_penalty=1.0  # Estabilizar comprimento
             )
             
