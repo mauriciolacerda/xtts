@@ -71,7 +71,7 @@ DEFAULT_TOP_P = 0.85
 # - split_sentence usa 250 chars por padrão
 # - gpt_max_text_tokens = 400 tokens (~400 chars considerando idiomas latinos)
 CHUNK_THRESHOLD = 400  # Caracteres mínimos para ativar chunking
-DEFAULT_CHUNK_SIZE = 250  # Tamanho alvo de cada chunk (recomendado pela doc XTTS)
+DEFAULT_CHUNK_SIZE = 200  # Tamanho alvo de cada chunk (recomendado pela doc XTTS)
 PROGRESS_UPDATE_INTERVAL = 10  # Atualizar progresso a cada 10%
 
 MAX_TEXT_LENGTH = 100000  # Caracteres máximos permitidos
