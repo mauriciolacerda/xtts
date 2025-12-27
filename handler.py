@@ -574,6 +574,16 @@ def clean_text_for_tts(text, language="pt"):
     # 11. Remover pontuação final duplicada após o passo anterior
     text = re.sub(r'([.!?])\1+$', r'\1', text)
     
+    # 12. Remover espaços antes de pontuação final (evita "texto ponto")
+    text = re.sub(r'\s+([.!?])$', r'\1', text)
+    
+    # 13. Para textos muito curtos (< 20 chars), remover ponto final
+    # Isso evita que o modelo leia "punto" em frases curtas
+    if len(text) < 20 and text.endswith('.'):
+        text = text[:-1].strip()
+        if not text.endswith(('.', '!', '?')):
+            text += '.'  # Re-adicionar se não terminar com pontuação
+    
     cleaned_length = len(text)
     if original_length != cleaned_length:
         print(f"  Texto limpo: {original_length} -> {cleaned_length} caracteres")
