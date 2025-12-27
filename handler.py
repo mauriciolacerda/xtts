@@ -846,9 +846,9 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
             speed=speed,
             top_k=top_k,
             top_p=top_p,
-            enable_text_splitting=True,  # Ativar divisão inteligente (streaming-mode)
-            repetition_penalty=10.0,  # Valor padrão do XTTS para prevenir repetições
-            length_penalty=1.0  # Estabilizar comprimento
+            enable_text_splitting=False,  # Desabilitar - já dividimos manualmente
+            repetition_penalty=10.0,
+            length_penalty=1.0
         )
         
         chunk_time = time.time() - chunk_start
@@ -1146,9 +1146,9 @@ def handler(job):
                 speed=speed,
                 top_k=top_k,
                 top_p=top_p,
-                enable_text_splitting=True,  # Ativar divisão inteligente (streaming-mode)
-                repetition_penalty=10.0,  # Valor padrão do XTTS para prevenir repetições
-                length_penalty=1.0  # Estabilizar comprimento
+                enable_text_splitting=False,  # Desabilitar para evitar vocalização de pontuação
+                repetition_penalty=10.0,
+                length_penalty=1.0
             )
             
             # Pós-processar áudio gerado
