@@ -776,9 +776,10 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
         print(f"\n--- Chunk {chunk_num}/{total_chunks} ---")
         print(f"Texto: {chunk_text[:80]}...")
         
-        # Remover pontuação final do chunk para evitar vocalização
-        # XTTS tende a falar "punto", "ponto", "point" quando chunk termina em .
-        chunk_text_clean = re.sub(r'[.!?]+\s*$', '', chunk_text).strip()
+        # Remover TODOS os pontos finais para evitar vocalização
+        # Substitui ". " por " " (ponto seguido de espaço) e remove ponto final
+        chunk_text_clean = re.sub(r'\.\s+', ' ', chunk_text)  # ". " -> " "
+        chunk_text_clean = re.sub(r'[.!?]+\s*$', '', chunk_text_clean).strip()  # Remove final
         
         # Gerar áudio para este chunk
         chunk_file = f"/tmp/chunk_{job_id}_{i}.wav"
@@ -1074,8 +1075,9 @@ def handler(job):
             print(f"\nTexto curto ({text_length} chars). Usando estratégia SINGLE.")
             output_path = f"/tmp/output_{voice_id}_{uuid.uuid4().hex[:8]}.wav"
             
-            # Remover pontuação final para evitar vocalização
-            gen_text_clean = re.sub(r'[.!?]+\s*$', '', gen_text).strip()
+            # Remover TODOS os pontos finais para evitar vocalização
+            gen_text_clean = re.sub(r'\.\s+', ' ', gen_text)  # ". " -> " "
+            gen_text_clean = re.sub(r'[.!?]+\s*$', '', gen_text_clean).strip()  # Remove final
             
             print("Gerando áudio com XTTS V2...")
             
