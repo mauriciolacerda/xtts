@@ -71,7 +71,7 @@ DEFAULT_TOP_P = 0.85
 # - split_sentence usa 250 chars por padrão
 # - gpt_max_text_tokens = 400 tokens (~400 chars considerando idiomas latinos)
 CHUNK_THRESHOLD = 400  # Caracteres mínimos para ativar chunking
-DEFAULT_CHUNK_SIZE = 200  # Tamanho alvo de cada chunk (recomendado pela doc XTTS)
+DEFAULT_CHUNK_SIZE = 150  # Chunks menores para melhor estabilidade prosódica
 PROGRESS_UPDATE_INTERVAL = 10  # Atualizar progresso a cada 10%
 
 MAX_TEXT_LENGTH = 100000  # Caracteres máximos permitidos
@@ -846,7 +846,10 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
             speed=speed,
             top_k=top_k,
             top_p=top_p,
-            split_sentences=False  # Desabilitar split interno para evitar vocalização de pontuação
+            split_sentences=True,  # Manter split interno para estabilidade
+            enable_text_splitting=True,  # Ativar divisão inteligente (streaming-mode)
+            repetition_penalty=5.0,  # Prevenir repetições
+            length_penalty=1.0  # Estabilizar comprimento
         )
         
         chunk_time = time.time() - chunk_start
@@ -1144,7 +1147,10 @@ def handler(job):
                 speed=speed,
                 top_k=top_k,
                 top_p=top_p,
-                split_sentences=False  # Desabilitar split interno
+                split_sentences=True,  # Manter split interno para estabilidade
+                enable_text_splitting=True,  # Ativar divisão inteligente (streaming-mode)
+                repetition_penalty=5.0,  # Prevenir repetições
+                length_penalty=1.0  # Estabilizar comprimento
             )
             
             # Pós-processar áudio gerado
