@@ -10,6 +10,8 @@ import time
 import uuid
 import shutil
 import re
+import signal
+import atexit
 from datetime import datetime, timedelta
 from pathlib import Path
 import psutil
@@ -37,6 +39,9 @@ except Exception as e:
 
 
 # ===== CONFIGURAÇÃO =====
+
+# Armazenar job_id atual para signal handler
+CURRENT_JOB_ID = None
 
 # Diretório de cache local para áudios de referência
 CACHE_DIR = Path("/tmp/audio_cache")
@@ -162,6 +167,56 @@ except Exception as e:
 
 
 # ===== CLIENTE GCS =====
+
+def update_progress_to_timeout(job_id):
+    """
+    Atualiza progresso para status 'timeout' quando container é encerrado.
+    """
+    if not gcs_client or not GCS_BUCKET_NAME or not job_id:
+        return
+    
+    try:
+        bucket = gcs_client.bucket(GCS_BUCKET_NAME)
+        blob = bucket.blob(f"progress/{job_id}.json")
+        
+        # Tentar ler progresso existente
+        try:
+            existing_data = json.loads(blob.download_as_string())
+        except:
+            existing_data = {}
+        
+        # Atualizar com status de timeout
+        existing_data.update({
+            "status": "timeout",
+            "error": "RunPod container timeout - job exceeded maximum execution time",
+            "updated_at": datetime.utcnow().isoformat() + "Z",
+            "terminated_at": datetime.utcnow().isoformat() + "Z"
+        })
+        
+        blob.upload_from_string(
+            json.dumps(existing_data, indent=2),
+            content_type="application/json"
+        )
+        print(f"Status atualizado para timeout: {job_id}")
+    except Exception as e:
+        print(f"ERRO ao atualizar status de timeout: {e}")
+
+
+def signal_handler(signum, frame):
+    """
+    Captura SIGTERM/SIGINT e atualiza status antes de encerrar.
+    """
+    print(f"\nSinal {signum} recebido. Atualizando status...")
+    global CURRENT_JOB_ID
+    if CURRENT_JOB_ID:
+        update_progress_to_timeout(CURRENT_JOB_ID)
+    exit(1)
+
+
+# Registrar signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 
 def init_gcs_client():
     """Inicializa cliente do Google Cloud Storage"""
@@ -725,6 +780,7 @@ def split_text_into_sentence_chunks(text, chunk_size=DEFAULT_CHUNK_SIZE):
 def save_progress_to_gcs(job_id, progress_data):
     """
     Salva progresso do job no GCS para permitir polling externo.
+    Inclui timestamp para detecção de stale status.
     """
     if not gcs_client or not GCS_BUCKET_NAME:
         return
@@ -733,6 +789,7 @@ def save_progress_to_gcs(job_id, progress_data):
         bucket = gcs_client.bucket(GCS_BUCKET_NAME)
         blob = bucket.blob(f"progress/{job_id}.json")
         
+        # Adicionar timestamp UTC
         progress_data["updated_at"] = datetime.utcnow().isoformat() + "Z"
         blob.upload_from_string(
             json.dumps(progress_data, indent=2),
@@ -973,6 +1030,11 @@ def handler(job):
         
         # Gerar job_id único para tracking
         job_id = job.get("id", str(uuid.uuid4()))
+        
+        # Armazenar job_id global para signal handler
+        global CURRENT_JOB_ID
+        CURRENT_JOB_ID = job_id
+        
         text_length = len(gen_text)
         
         # Validar tamanho máximo do texto (prevenir timeout)
