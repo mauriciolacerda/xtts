@@ -833,23 +833,20 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
         print(f"\n--- Chunk {chunk_num}/{total_chunks} ---")
         print(f"Texto: {chunk_text[:80]}...")
         
-        # Remover APENAS pontuação final (onde XTTS vocaliza)
-        # Manter pontos internos para entonação correta
-        chunk_text_clean = re.sub(r'[.!?]+\s*$', '', chunk_text).strip()
-        
         # Gerar áudio para este chunk
         chunk_file = f"/tmp/chunk_{job_id}_{i}.wav"
         chunk_start = time.time()
         
         tts.tts_to_file(
-            text=chunk_text_clean,
+            text=chunk_text,
             speaker_wav=ref_audio_path,
             language=language,
             file_path=chunk_file,
             temperature=temperature,
             speed=speed,
             top_k=top_k,
-            top_p=top_p
+            top_p=top_p,
+            split_sentences=False  # Desabilitar split interno para evitar vocalização de pontuação
         )
         
         chunk_time = time.time() - chunk_start
@@ -925,15 +922,11 @@ def concatenate_audio_chunks(chunk_files, job_id, voice_id):
     # Carregar primeiro chunk
     combined = AudioSegment.from_wav(chunk_files[0])
     
-    # Criar silêncio de 400ms para simular pausa de ponto final
-    silence = AudioSegment.silent(duration=400)  # 400ms de pausa
-    
-    # Adicionar demais chunks com silêncio entre eles
+    # Adicionar demais chunks com crossfade suave
     for i, chunk_file in enumerate(chunk_files[1:], 1):
         print(f"  Concatenando chunk {i+1}/{len(chunk_files)}...")
         next_chunk = AudioSegment.from_wav(chunk_file)
-        # Adicionar silêncio entre chunks (simula pausa de ponto final)
-        combined = combined + silence + next_chunk
+        combined = combined.append(next_chunk, crossfade=50)  # 50ms de crossfade
     
     # Exportar resultado final
     output_path = f"/tmp/output_{voice_id}_{uuid.uuid4().hex[:8]}.wav"
@@ -1140,20 +1133,18 @@ def handler(job):
             print(f"\nTexto curto ({text_length} chars). Usando estratégia SINGLE.")
             output_path = f"/tmp/output_{voice_id}_{uuid.uuid4().hex[:8]}.wav"
             
-            # Remover APENAS pontuação final (onde XTTS vocaliza)
-            gen_text_clean = re.sub(r'[.!?]+\s*$', '', gen_text).strip()
-            
             print("Gerando áudio com XTTS V2...")
             
             tts.tts_to_file(
-                text=gen_text_clean,
+                text=gen_text,
                 speaker_wav=ref_audio_path,
                 language=language,
                 file_path=output_path,
                 temperature=temperature,
                 speed=speed,
                 top_k=top_k,
-                top_p=top_p
+                top_p=top_p,
+                split_sentences=False  # Desabilitar split interno
             )
             
             # Pós-processar áudio gerado
