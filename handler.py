@@ -567,22 +567,13 @@ def clean_text_for_tts(text, language="pt"):
     text = re.sub(r'\n+', ' ', text)  # Quebras de linha -> espaço
     text = text.strip()
     
-    # 10. Garantir que termina com pontuação
-    if text and text[-1] not in '.!?':
-        text += '.'
+    # 10. REMOVER pontuação final para evitar vocalização
+    # XTTS tem tendência de falar "punto", "ponto", "point" quando texto termina em .
+    # O modelo adiciona pausa natural no final automaticamente
+    text = re.sub(r'[.!?]+\s*$', '', text)
     
-    # 11. Remover pontuação final duplicada após o passo anterior
-    text = re.sub(r'([.!?])\1+$', r'\1', text)
-    
-    # 12. Remover espaços antes de pontuação final (evita "texto ponto")
-    text = re.sub(r'\s+([.!?])$', r'\1', text)
-    
-    # 13. Para textos muito curtos (< 20 chars), remover ponto final
-    # Isso evita que o modelo leia "punto" em frases curtas
-    if len(text) < 20 and text.endswith('.'):
-        text = text[:-1].strip()
-        if not text.endswith(('.', '!', '?')):
-            text += '.'  # Re-adicionar se não terminar com pontuação
+    # 11. Remover espaços finais novamente após remoção da pontuação
+    text = text.rstrip()
     
     cleaned_length = len(text)
     if original_length != cleaned_length:
