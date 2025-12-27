@@ -567,13 +567,12 @@ def clean_text_for_tts(text, language="pt"):
     text = re.sub(r'\n+', ' ', text)  # Quebras de linha -> espaço
     text = text.strip()
     
-    # 10. REMOVER pontuação final para evitar vocalização
-    # XTTS tem tendência de falar "punto", "ponto", "point" quando texto termina em .
-    # O modelo adiciona pausa natural no final automaticamente
-    text = re.sub(r'[.!?]+\s*$', '', text)
+    # 10. Garantir que termina com pontuação (para split_sentence funcionar corretamente)
+    if text and text[-1] not in '.!?':
+        text += '.'
     
-    # 11. Remover espaços finais novamente após remoção da pontuação
-    text = text.rstrip()
+    # 11. Remover pontuação final duplicada
+    text = re.sub(r'([.!?])\1+$', r'\1', text)
     
     cleaned_length = len(text)
     if original_length != cleaned_length:
@@ -777,12 +776,16 @@ def process_chunks_sequentially(chunks, job_id, ref_audio_path, language,
         print(f"\n--- Chunk {chunk_num}/{total_chunks} ---")
         print(f"Texto: {chunk_text[:80]}...")
         
+        # Remover pontuação final do chunk para evitar vocalização
+        # XTTS tende a falar "punto", "ponto", "point" quando chunk termina em .
+        chunk_text_clean = re.sub(r'[.!?]+\s*$', '', chunk_text).strip()
+        
         # Gerar áudio para este chunk
         chunk_file = f"/tmp/chunk_{job_id}_{i}.wav"
         chunk_start = time.time()
         
         tts.tts_to_file(
-            text=chunk_text,
+            text=chunk_text_clean,
             speaker_wav=ref_audio_path,
             language=language,
             file_path=chunk_file,
@@ -1071,10 +1074,13 @@ def handler(job):
             print(f"\nTexto curto ({text_length} chars). Usando estratégia SINGLE.")
             output_path = f"/tmp/output_{voice_id}_{uuid.uuid4().hex[:8]}.wav"
             
+            # Remover pontuação final para evitar vocalização
+            gen_text_clean = re.sub(r'[.!?]+\s*$', '', gen_text).strip()
+            
             print("Gerando áudio com XTTS V2...")
             
             tts.tts_to_file(
-                text=gen_text,
+                text=gen_text_clean,
                 speaker_wav=ref_audio_path,
                 language=language,
                 file_path=output_path,
